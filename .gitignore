@@ -46,6 +46,7 @@ models/
 ../models/
 
 # Data artifacts
+data/
 data/pixmo_count/images/
 data/pixmo_count/*.jsonl
 data/localization_train.jsonl

@@ -80,6 +80,8 @@ def build_dataloaders(
         latent_token_ids=bundle.latent_info.token_ids,
         max_length=cfg["max_length"],
         label_assistant_end=cfg.get("label_assistant_end", True),
+        image_min_pixels=cfg.get("image_min_pixels"),
+        image_max_pixels=cfg.get("image_max_pixels"),
     )
     use_latents = include_latents(cfg["stage"])
     train_sampler = DistributedSampler(
@@ -272,7 +274,7 @@ def main() -> None:
                 )
                 print(f"epoch={epoch} val_acc={val_acc:.6f}")
                 print(f"epoch={epoch} val_predictions={prediction_path}")
-                for sample in prediction_rows[: min(len(prediction_rows), 5)]:
+                for sample in prediction_rows:
                     print(
                         "sample",
                         sample["id"],

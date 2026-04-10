@@ -5,4 +5,5 @@ cd "$(dirname "$0")/.."
 
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
 python -m livr.eval \
-  --config configs/counting_qwen3vl_sft.yaml
+  --config configs/counting_qwen3vl_sft.yaml \
+  --output-dir outputs/counting_base_eval

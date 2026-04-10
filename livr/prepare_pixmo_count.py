@@ -50,7 +50,7 @@ def resolve_count(row: dict[str, Any]) -> int | None:
 
 
 def resolve_object_name(row: dict[str, Any]) -> str:
-    for key in ["object", "object_name", "category", "label_name"]:
+    for key in ["label", "object", "object_name", "category", "label_name"]:
         if key in row and row[key]:
             return str(row[key])
     return "objects"

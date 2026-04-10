@@ -88,6 +88,8 @@ class LIVRBatchBuilder:
         latent_token_ids: Sequence[int],
         max_length: int,
         label_assistant_end: bool = True,
+        image_min_pixels: int | None = None,
+        image_max_pixels: int | None = None,
     ) -> None:
         self.processor = processor
         self.tokenizer = tokenizer
@@ -97,11 +99,15 @@ class LIVRBatchBuilder:
         self.image_token_id = tokenizer.convert_tokens_to_ids("<|image_pad|>")
         self.im_end_token_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
         self.label_assistant_end = label_assistant_end
+        self.image_min_pixels = image_min_pixels
+        self.image_max_pixels = image_max_pixels
 
     def _build_task_prompt(self, row: dict[str, Any]) -> str:
+        prompt = str(row.get("prompt", "")).strip()
+        if prompt:
+            return prompt
         task = row.get("task", "")
-        prompt = row["prompt"].strip()
-        if task == "counting" and (not prompt or prompt.lower().startswith("count the number of objects")):
+        if task == "counting":
             object_name = row.get("object_name", "objects")
             return build_counting_prompt(object_name)
         return build_localization_prompt(prompt)
@@ -139,14 +145,22 @@ class LIVRBatchBuilder:
         last_error: Exception | None = None
         for max_length in self._candidate_max_lengths():
             try:
-                return self.processor(
-                    text=[text],
-                    images=[image],
-                    padding=False,
-                    truncation=True,
-                    max_length=max_length,
-                    return_tensors="pt",
-                )
+                processor_kwargs = {
+                    "text": [text],
+                    "images": [image],
+                    "padding": False,
+                    "truncation": True,
+                    "max_length": max_length,
+                    "return_tensors": "pt",
+                }
+                images_kwargs = {}
+                if self.image_min_pixels is not None:
+                    images_kwargs["min_pixels"] = int(self.image_min_pixels)
+                if self.image_max_pixels is not None:
+                    images_kwargs["max_pixels"] = int(self.image_max_pixels)
+                if images_kwargs:
+                    processor_kwargs["images_kwargs"] = images_kwargs
+                return self.processor(**processor_kwargs)
             except ValueError as exc:
                 if "Mismatch in `image` token count" not in str(exc):
                     raise
@@ -201,7 +215,7 @@ class LIVRBatchBuilder:
             target=row["target"],
             input_ids=input_ids,
             labels=labels,
-            pixel_values=encoded.get("pixel_values", None)[0] if encoded.get("pixel_values", None) is not None else None,
+            pixel_values=encoded.get("pixel_values", None) if encoded.get("pixel_values", None) is not None else None,
             image_grid_thw=encoded.get("image_grid_thw", None)[0] if encoded.get("image_grid_thw", None) is not None else None,
             attention_mask_2d=attention_mask_2d,
             image_span=image_span,
@@ -252,7 +266,7 @@ class LIVRBatchBuilder:
         }
 
         if rows[0].pixel_values is not None:
-            batch["pixel_values"] = torch.stack([row.pixel_values for row in rows], dim=0)
+            batch["pixel_values"] = torch.cat([row.pixel_values for row in rows], dim=0)
         if rows[0].image_grid_thw is not None:
             batch["image_grid_thw"] = torch.stack([row.image_grid_thw for row in rows], dim=0)
         return batch

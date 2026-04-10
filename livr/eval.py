@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from livr.data import LIVRBatchBuilder, LIVRJsonlDataset
 from livr.model import LIVRModelWrapper, load_model_bundle
@@ -15,6 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", default=None)
+    parser.add_argument("--output-dir", default=None)
     return parser.parse_args()
 
 
@@ -43,7 +45,8 @@ def main() -> None:
     )
     model_wrapper = LIVRModelWrapper(bundle.model.eval(), stage=cfg["stage"])
 
-    dataset = LIVRJsonlDataset(cfg["val_file"])
+    eval_file = cfg.get("test_file", cfg["val_file"])
+    dataset = LIVRJsonlDataset(eval_file)
     batch_builder = LIVRBatchBuilder(
         processor=bundle.processor,
         tokenizer=bundle.tokenizer,
@@ -62,7 +65,9 @@ def main() -> None:
     rows = []
     correct = 0
     total = 0
-    for batch in dataloader:
+    progress = tqdm(dataloader, desc="eval", leave=True)
+    for batch in progress:
+        # batch['prompts'] = ["请描述图片"]
         generations = model_wrapper.generate(batch, max_new_tokens=cfg.get("eval_max_new_tokens", 8))
         prompt_len = batch["input_ids"].shape[1]
         for i in range(generations.shape[0]):
@@ -83,8 +88,23 @@ def main() -> None:
                     "correct": is_correct,
                 }
             )
+            print(
+                "sample",
+                batch["ids"][i],
+                "target=",
+                target,
+                "pred=",
+                pred,
+                "raw_pred=",
+                repr(text),
+                "correct=",
+                is_correct,
+            )
+        progress.set_postfix(acc=f"{correct / max(total, 1):.4f}")
 
-    output_path = Path(cfg["output_dir"]) / "predictions.jsonl"
+    output_dir = Path(args.output_dir) if args.output_dir is not None else Path(cfg["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "predictions.jsonl"
     save_jsonl(str(output_path), rows)
     acc = correct / max(total, 1)
     print(f"accuracy={acc:.4f}")
