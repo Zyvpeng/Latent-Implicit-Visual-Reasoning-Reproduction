@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from transformers import get_linear_schedule_with_warmup
@@ -28,6 +28,7 @@ from livr.utils import (
     load_yaml,
     normalize_count_prediction,
     normalize_mcq_prediction,
+    save_jsonl,
     set_seed,
 )
 
@@ -69,6 +70,9 @@ def build_dataloaders(
 ) -> tuple[DataLoader, DataLoader | None, DataLoader | None, LIVRBatchBuilder, DistributedSampler | None]:
     train_ds = LIVRJsonlDataset(cfg["train_file"])
     val_ds = LIVRJsonlDataset(cfg["val_file"])
+    val_subset_size = cfg.get("train_val_subset_size")
+    if val_subset_size is not None:
+        val_ds = Subset(val_ds, list(range(min(int(val_subset_size), len(val_ds)))))
     batch_builder = LIVRBatchBuilder(
         processor=bundle.processor,
         tokenizer=bundle.tokenizer,
@@ -137,10 +141,17 @@ def _normalize_prediction(text: str, target: str) -> str:
     return normalize_mcq_prediction(text)
 
 
-def evaluate_accuracy(model_wrapper, dataloader, tokenizer, max_new_tokens: int) -> float:
+def evaluate_accuracy(
+    model_wrapper,
+    dataloader,
+    tokenizer,
+    max_new_tokens: int,
+    prediction_output_path: str | None = None,
+) -> tuple[float, list[dict[str, object]]]:
     model_wrapper.eval()
     correct = 0
     total = 0
+    rows: list[dict[str, object]] = []
     progress = tqdm(dataloader, disable=not is_main_process(), desc="val_acc", leave=False)
     with torch.no_grad():
         for batch in progress:
@@ -150,13 +161,26 @@ def evaluate_accuracy(model_wrapper, dataloader, tokenizer, max_new_tokens: int)
                 raw_text = tokenizer.decode(generations[i][prompt_len:], skip_special_tokens=False)
                 text = raw_text.split("<|im_end|>", 1)[0].strip()
                 pred = _normalize_prediction(text, batch["targets"][i])
-                if pred == batch["targets"][i]:
+                is_correct = pred == batch["targets"][i]
+                if is_correct:
                     correct += 1
                 total += 1
+                rows.append(
+                    {
+                        "id": batch["ids"][i],
+                        "prompt": batch["prompts"][i],
+                        "target": batch["targets"][i],
+                        "raw_pred": text,
+                        "pred": pred,
+                        "correct": is_correct,
+                    }
+                )
             if is_main_process():
                 progress.set_postfix(acc=f"{correct / max(total, 1):.4f}")
     model_wrapper.train()
-    return correct / max(total, 1)
+    if prediction_output_path is not None:
+        save_jsonl(prediction_output_path, rows)
+    return correct / max(total, 1), rows
 
 
 def main() -> None:
@@ -238,13 +262,29 @@ def main() -> None:
             val_acc = 0.0
             if cfg.get("compute_val_accuracy", True) and val_eval_loader is not None:
                 print(f"epoch={epoch} computing_val_acc...")
-                val_acc = evaluate_accuracy(
+                prediction_path = str(Path(cfg["output_dir"]) / f"val_predictions_epoch_{epoch}.jsonl")
+                val_acc, prediction_rows = evaluate_accuracy(
                     raw_wrapper,
                     val_eval_loader,
                     bundle.tokenizer,
                     max_new_tokens=cfg.get("eval_max_new_tokens", 8),
+                    prediction_output_path=prediction_path,
                 )
                 print(f"epoch={epoch} val_acc={val_acc:.6f}")
+                print(f"epoch={epoch} val_predictions={prediction_path}")
+                for sample in prediction_rows[: min(len(prediction_rows), 5)]:
+                    print(
+                        "sample",
+                        sample["id"],
+                        "target=",
+                        sample["target"],
+                        "pred=",
+                        sample["pred"],
+                        "raw_pred=",
+                        repr(sample["raw_pred"]),
+                        "correct=",
+                        sample["correct"],
+                    )
             debug_path = Path(cfg["output_dir"]) / f"debug_epoch_{epoch}.txt"
             first_batch = next(iter(train_loader))
             with open(debug_path, "w", encoding="utf-8") as f:

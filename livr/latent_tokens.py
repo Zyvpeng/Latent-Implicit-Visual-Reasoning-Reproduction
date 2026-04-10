@@ -25,7 +25,7 @@ def add_latent_tokens(tokenizer, num_latents: int) -> LatentTokenInfo:
 
 
 def latent_token_text(tokens: Sequence[str]) -> str:
-    return " ".join(tokens)
+    return "".join(tokens)
 
 
 def register_row_mask_hook(module: torch.nn.Module, trainable_rows: Iterable[int]) -> None:

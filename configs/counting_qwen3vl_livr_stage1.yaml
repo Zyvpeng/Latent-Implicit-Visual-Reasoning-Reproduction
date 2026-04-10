@@ -19,6 +19,7 @@ bf16: true
 gradient_checkpointing: true
 eval_max_new_tokens: 8
 compute_val_accuracy: true
+train_val_subset_size: 10
 label_assistant_end: true
 seed: 42
 debug: true
