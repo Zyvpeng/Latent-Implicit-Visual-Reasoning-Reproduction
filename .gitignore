@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+env/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Logs / temp
+*.log
+*.out
+*.tmp
+tmp/
+
+# Training outputs
+outputs/
+runs/
+wandb/
+
+# Checkpoints / weights / tensors
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# Local model storage
+models/
+../models/
+
+# Data artifacts
+data/pixmo_count/images/
+data/pixmo_count/*.jsonl
+data/localization_train.jsonl
+data/localization_val.jsonl
+
+# Notebook artifacts
+.ipynb_checkpoints/
