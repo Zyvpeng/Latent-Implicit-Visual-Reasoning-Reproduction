@@ -192,6 +192,47 @@ CUDA_VISIBLE_DEVICES=8 \
 bash scripts/eval_counting_qwen3vl_sft.sh outputs/counting_sft/best
 ```
 
+### LIVR Stage 1 checkpoint
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+CUDA_VISIBLE_DEVICES=8 bash scripts/eval_counting_qwen3vl_stage1.sh
+```
+
+指定 checkpoint：  
+Specify a checkpoint:
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+CUDA_VISIBLE_DEVICES=8 \
+bash scripts/eval_counting_qwen3vl_stage1.sh outputs/counting_livr_stage1/best
+```
+
+### LIVR Stage 2 checkpoint
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+CUDA_VISIBLE_DEVICES=8 bash scripts/eval_counting_qwen3vl_stage2.sh
+```
+
+指定 checkpoint：  
+Specify a checkpoint:
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+CUDA_VISIBLE_DEVICES=8 \
+bash scripts/eval_counting_qwen3vl_stage2.sh outputs/counting_livr_stage2/best
+```
+
+如果你想固定评测某一轮，比如 `epoch_5`：  
+If you want to evaluate a specific epoch such as `epoch_5`:
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+CUDA_VISIBLE_DEVICES=8 \
+bash scripts/eval_counting_qwen3vl_stage2.sh outputs/counting_livr_stage2/epoch_5
+```
+
 当前 `livr.eval` 会输出：  
 Current `livr.eval` writes:
 
