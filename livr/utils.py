@@ -35,10 +35,34 @@ def load_jsonl(path: str) -> list[dict[str, Any]]:
 
 
 def set_seed(seed: int) -> None:
+    os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    if torch.backends.cudnn.is_available():
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
+def validate_qwen3vl_vision_batch(
+    pixel_values: torch.Tensor | None,
+    image_grid_thw: torch.Tensor | None,
+    where: str,
+) -> None:
+    if pixel_values is None or image_grid_thw is None:
+        return
+    if pixel_values.ndim != 2:
+        raise ValueError(f"{where}: expected pixel_values to have shape (num_visual_tokens, hidden_dim), got {tuple(pixel_values.shape)}")
+    if image_grid_thw.ndim != 2 or image_grid_thw.shape[1] != 3:
+        raise ValueError(f"{where}: expected image_grid_thw to have shape (batch, 3), got {tuple(image_grid_thw.shape)}")
+    expected_tokens = int(image_grid_thw.to(dtype=torch.long).prod(dim=1).sum().item())
+    actual_tokens = int(pixel_values.shape[0])
+    if actual_tokens != expected_tokens:
+        raise ValueError(
+            f"{where}: pixel_values first dimension should equal total visual tokens from image_grid_thw; "
+            f"got pixel_values.shape[0]={actual_tokens}, expected={expected_tokens}"
+        )
 
 
 def ensure_dir(path: str) -> None:
@@ -119,7 +143,7 @@ def normalize_count_prediction(text: str) -> str:
     }
     upper = stripped.upper()
     for word, num in word_to_num.items():
-        if word in upper:
+        if re.search(rf"\b{re.escape(word)}\b", upper):
             return num
     return stripped
 

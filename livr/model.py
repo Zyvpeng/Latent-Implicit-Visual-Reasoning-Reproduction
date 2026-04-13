@@ -6,13 +6,18 @@ from typing import Any
 
 import torch
 from peft import LoraConfig, PeftModel, TaskType, get_peft_model
-from transformers import AutoModelForImageTextToText, AutoProcessor
+from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
 from safetensors import safe_open
 
 try:
     from transformers import Qwen3VLForConditionalGeneration
 except Exception:  # pragma: no cover
     Qwen3VLForConditionalGeneration = None
+
+try:
+    from transformers import Qwen2_5_VLForConditionalGeneration
+except Exception:  # pragma: no cover
+    Qwen2_5_VLForConditionalGeneration = None
 
 from livr.attention_mask import build_livr_attention_mask
 from livr.latent_tokens import (
@@ -40,6 +45,16 @@ class LIVRBundle:
     processor: Any
     tokenizer: Any
     latent_info: LatentTokenInfo
+
+
+def resolve_model_class(model_name: str):
+    config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    model_type = getattr(config, "model_type", None)
+    if model_type == "qwen3_vl" and Qwen3VLForConditionalGeneration is not None:
+        return Qwen3VLForConditionalGeneration
+    if model_type == "qwen2_5_vl" and Qwen2_5_VLForConditionalGeneration is not None:
+        return Qwen2_5_VLForConditionalGeneration
+    return AutoModelForImageTextToText
 
 
 def _stage_uses_latents(stage: str) -> bool:
@@ -149,7 +164,7 @@ def load_model_bundle(
         latent_info = LatentTokenInfo(tokens=[], token_ids=[])
 
     torch_dtype = _resolve_torch_dtype(cfg.get("bf16", True))
-    model_cls = Qwen3VLForConditionalGeneration or AutoModelForImageTextToText
+    model_cls = resolve_model_class(cfg["model_name"])
     model = model_cls.from_pretrained(
         cfg["model_name"],
         dtype=torch_dtype,

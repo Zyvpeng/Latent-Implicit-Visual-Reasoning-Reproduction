@@ -20,9 +20,9 @@ test_file: data/pixmo_count_livr_paper/counting_test.jsonl
 output_dir: outputs/counting_livr_stage2
 bf16: true
 gradient_checkpointing: true
-eval_max_new_tokens: 8
+eval_max_new_tokens: 200
 compute_val_accuracy: true
-train_val_subset_size: 10
+train_val_subset_size: null
 label_assistant_end: true
 seed: 42
 debug: true

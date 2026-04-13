@@ -27,7 +27,7 @@ The current main backbone is `Qwen3-VL-4B-Instruct`, and the current primary tas
   - `livr_stage2`
 - 评测入口：
   - 原始官方风格 Qwen3-VL baseline
-  - SFT checkpoint
+  - 官方风格 SFT checkpoint
   - LIVR Stage 1 checkpoint
   - LIVR Stage 2 checkpoint
 
@@ -61,8 +61,8 @@ Implemented LIVR core mechanisms:
 
 ## SFT 范式 | SFT Protocol
 
-当前训练和推理统一遵循 `Qwen3-VL` 的 chat template。  
-Training and inference consistently follow the `Qwen3-VL` chat template.
+当前 SFT 训练和推理已经拆成独立的 official-style 路径；LIVR Stage 1/2 继续使用通用 LIVR 路径。  
+SFT training and inference now use a dedicated official-style path; LIVR Stage 1/2 continue to use the shared LIVR path.
 
 - 不额外注入自定义 system prompt。  
   No extra custom system prompt is injected.
@@ -70,8 +70,8 @@ Training and inference consistently follow the `Qwen3-VL` chat template.
   Training and inference share the same prompt prefix.
 - 训练监督 assistant answer 和 `<|im_end|>`。  
   Training supervises both the assistant answer and `<|im_end|>`.
-- `direct_sft` 不使用 latent tokens。  
-  `direct_sft` does not use latent tokens.
+- `direct_sft` 不使用 latent tokens，并走标准 2D `attention_mask` + `model.generate(...)`。  
+  `direct_sft` does not use latent tokens, and uses standard 2D `attention_mask` + `model.generate(...)`.
 - `livr_stage1 / livr_stage2` 使用 `<livr_0> ... <livr_15>`，且 latent token 之间不插入空格。  
   `livr_stage1 / livr_stage2` use `<livr_0> ... <livr_15>` with no spaces inserted between latent tokens.
 
@@ -101,9 +101,11 @@ LIVR/
 │   ├── data.py
 │   ├── eval.py
 │   ├── eval_qwen3vl_base_official.py
+│   ├── eval_qwen3vl_sft_official.py
 │   ├── latent_tokens.py
 │   ├── model.py
 │   ├── prepare_pixmo_count.py
+│   ├── sft_official.py
 │   ├── train.py
 │   └── utils.py
 ├── scripts/
@@ -153,20 +155,20 @@ The currently aligned version is `torch 2.4.0 + CUDA 12.1`.
 当前 counting 配置默认使用：  
 The current counting configs use:
 
-- `data/pixmo_count_livr/counting_train.jsonl`
-- `data/pixmo_count_livr/counting_val.jsonl`
-- `data/pixmo_count_livr/counting_test.jsonl`
+- `data/pixmo_count_livr_paper/counting_train.jsonl`
+- `data/pixmo_count_livr_paper/counting_val.jsonl`
+- `data/pixmo_count_livr_paper/counting_test.jsonl`
 
 当前这套 split 的特点：  
 Characteristics of the current split:
 
 - `train = 1000`
 - `val = 524`
-- `test = 467`
+- `test = 527`
 - train 在 `count ∈ [2, 10]` 上近均衡  
   the train split is nearly balanced over `count ∈ [2, 10]`
-- train 进一步做了 `count + label` 的轮转均衡，降低了 `people` 过度占比  
-  the train split also uses `count + label` round-robin balancing to reduce `people` dominance
+- train 使用 paper-style 的按 count 抽样，不再额外做 label 均衡  
+  the train split uses paper-style count-balanced sampling, without extra label balancing
 
 ### 3. 更接近论文的去重 split
 
@@ -203,7 +205,7 @@ Current counting configs include:
 - `grad_accum_steps: 8`
 - `bf16: true`
 - `gradient_checkpointing: true`
-- `train_val_subset_size: 10`
+- `train_val_subset_size: null`
 - `compute_val_accuracy: true`
 
 说明：  
@@ -211,12 +213,15 @@ Notes:
 
 - `image_min_pixels / image_max_pixels` 用于控制 Qwen3-VL 视觉 token 长度，避免图像 token 过长触发 processor truncation mismatch。  
   `image_min_pixels / image_max_pixels` are used to cap Qwen3-VL visual token length and avoid processor truncation mismatch.
-- 训练时每个 epoch 仅在 `10` 条 validation 样本上计算 `val_loss` 和 `val_acc`，并逐条打印预测。  
-  Each epoch evaluates `val_loss` and `val_acc` on only `10` validation examples and prints each prediction.
+- 论文对齐配置下，训练时每个 epoch 会在完整 validation set 上计算 `val_loss` 和 `val_acc`，并逐条打印预测。  
+  Under the paper-aligned setup, each epoch evaluates `val_loss` and `val_acc` on the full validation set and prints each prediction.
 
 ## 训练 | Training
 
 ### Direct SFT
+
+`direct_sft` 现在使用独立的 official-style SFT 训练入口，不再和 `base eval` 或 LIVR 通用 wrapper 共用一条训练实现。  
+`direct_sft` now uses a dedicated official-style SFT training path instead of sharing the same training implementation as `base eval` or the generic LIVR wrapper.
 
 ```bash
 cd /home/ypzheng/latent_reasoning/LIVR
@@ -273,6 +278,9 @@ CUDA_VISIBLE_DEVICES=8 bash scripts/eval_counting_qwen3vl_base.sh
 
 ### 3. SFT checkpoint
 
+SFT 评测现在也走独立的 official-style 路径，不再借助通用 `eval.py`。  
+SFT evaluation now also uses a dedicated official-style path instead of the shared `eval.py`.
+
 ```bash
 cd /home/ypzheng/latent_reasoning/LIVR
 CUDA_VISIBLE_DEVICES=8 bash scripts/eval_counting_qwen3vl_sft.sh
@@ -285,6 +293,7 @@ Specify a checkpoint:
 cd /home/ypzheng/latent_reasoning/LIVR
 CUDA_VISIBLE_DEVICES=8 \
 bash scripts/eval_counting_qwen3vl_sft.sh outputs/counting_sft/best
+
 ```
 
 ### 4. LIVR Stage 1 checkpoint
@@ -382,10 +391,12 @@ python -m pytest tests
 
 - 旧 checkpoint 中，凡是在修复 `pixel_values` 维度 bug 之前训练得到的结果都不可信。  
   Any checkpoint trained before the `pixel_values` shape fix should be treated as invalid.
-- 当前默认 counting split 是 `data/pixmo_count_livr/`，不是最早的旧 `pixmo_count/` 目录。  
-  The current default counting split is `data/pixmo_count_livr/`, not the older `pixmo_count/` directory.
+- 当前默认 counting split 是 `data/pixmo_count_livr_paper/`，不是最早的旧 `pixmo_count/` 目录。  
+  The current default counting split is `data/pixmo_count_livr_paper/`, not the older `pixmo_count/` directory.
 - `pixmo-count` 官方有一部分 URL 已失效，因此最终可用的 `val/test` 样本数会小于官方 metadata 总数。  
   Some official `pixmo-count` URLs are dead, so the final usable `val/test` sizes are smaller than the raw metadata counts.
+- 当前 paper split 目录已经包含自包含的本地图片副本：`data/pixmo_count_livr_paper/images/`。  
+  The current paper split directory already contains a self-contained local image copy under `data/pixmo_count_livr_paper/images/`.
 - 多卡训练时，CPU 侧图像预处理仍可能成为瓶颈。  
   CPU-side image preprocessing can still be a bottleneck during multi-GPU training.
 
@@ -420,4 +431,3 @@ The following remain configurable in YAML:
 - `compute_val_accuracy`
 - `train_val_subset_size`
 - `label_assistant_end`
-

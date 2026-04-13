@@ -9,7 +9,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 from livr.latent_tokens import latent_token_text
-from livr.utils import build_localization_prompt, load_jsonl
+from livr.utils import build_localization_prompt, load_jsonl, validate_qwen3vl_vision_batch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -60,10 +60,7 @@ def load_image(path: str) -> Image.Image:
 
 
 def build_counting_prompt(object_name: str) -> str:
-    return (
-        f"Count the number of {object_name} in the image. "
-        "Answer with a single integer only."
-    )
+    return f"How many {object_name} are there in this image?"
 
 
 def build_labels(input_ids: torch.Tensor, answer_span: tuple[int, int], ignore_index: int = -100) -> torch.Tensor:
@@ -269,6 +266,11 @@ class LIVRBatchBuilder:
             batch["pixel_values"] = torch.cat([row.pixel_values for row in rows], dim=0)
         if rows[0].image_grid_thw is not None:
             batch["image_grid_thw"] = torch.stack([row.image_grid_thw for row in rows], dim=0)
+        validate_qwen3vl_vision_batch(
+            batch.get("pixel_values"),
+            batch.get("image_grid_thw"),
+            where="LIVRBatchBuilder._pack_batch",
+        )
         return batch
 
 

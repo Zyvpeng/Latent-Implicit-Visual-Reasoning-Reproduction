@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from livr.data import LIVRBatchBuilder, LIVRJsonlDataset
 from livr.model import LIVRModelWrapper, load_model_bundle
-from livr.utils import load_yaml, normalize_count_prediction, normalize_mcq_prediction, save_jsonl
+from livr.utils import load_yaml, normalize_count_prediction, normalize_mcq_prediction, save_jsonl, set_seed
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,10 +86,21 @@ def normalize_prediction(text: str, task: str) -> str:
     return normalize_mcq_prediction(text)
 
 
+def _maybe_adjust_prompt_for_base_eval(prompt: str, task: str, is_base_eval: bool) -> str:
+    if not is_base_eval or task != "counting":
+        return prompt
+    suffix = " Answer using a single integer only."
+    if prompt.endswith(suffix):
+        return prompt
+    return prompt + suffix
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_yaml(args.config)
+    set_seed(cfg.get("seed", 42))
     ckpt = args.checkpoint or cfg.get("init_checkpoint")
+    is_base_eval = ckpt is None
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     bundle = load_model_bundle(
         cfg,
@@ -113,6 +124,11 @@ def main() -> None:
         image_min_pixels=cfg.get("image_min_pixels"),
         image_max_pixels=cfg.get("image_max_pixels"),
     )
+    if is_base_eval:
+        for row in dataset.rows:
+            task = "counting" if str(row.get("target", "")).strip().isdigit() else "localization"
+            row["prompt"] = _maybe_adjust_prompt_for_base_eval(str(row["prompt"]).strip(), task, True)
+
     dataloader = DataLoader(
         dataset,
         batch_size=cfg["per_device_batch_size"],

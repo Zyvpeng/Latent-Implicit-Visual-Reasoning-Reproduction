@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_prompt(label: str) -> str:
-    return f'Count the number of {label} in the image. Answer with a single integer only.'
+    return f'How many {label} are there in this image?'
 
 
 def image_path_for_url(images_dir: Path, url: str) -> Path:

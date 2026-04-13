@@ -10,13 +10,9 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoProcessor
 
-try:
-    from transformers import Qwen3VLForConditionalGeneration as ModelCls
-except Exception:  # pragma: no cover
-    from transformers import AutoModelForImageTextToText as ModelCls
-
 from livr.data import LIVRJsonlDataset
-from livr.utils import load_yaml, normalize_count_prediction, normalize_mcq_prediction, save_jsonl
+from livr.model import resolve_model_class
+from livr.utils import load_yaml, normalize_count_prediction, normalize_mcq_prediction, save_jsonl, set_seed
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,6 +34,15 @@ def normalize_prediction(text: str, target: str) -> str:
     return normalize_mcq_prediction(text)
 
 
+def adjust_base_prompt(prompt: str, target: str) -> str:
+    if not target.strip().isdigit():
+        return prompt
+    suffix = " Answer using a single integer only."
+    if prompt.endswith(suffix):
+        return prompt
+    return prompt + suffix
+
+
 def collate_identity(rows):
     return rows
 
@@ -45,6 +50,7 @@ def collate_identity(rows):
 def main() -> None:
     args = parse_args()
     cfg = load_yaml(args.config)
+    set_seed(cfg.get("seed", 42))
     repo_root = Path(__file__).resolve().parents[1]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = (
@@ -54,7 +60,8 @@ def main() -> None:
     )
 
     processor = AutoProcessor.from_pretrained(cfg["model_name"], trust_remote_code=True)
-    model = ModelCls.from_pretrained(
+    model_cls = resolve_model_class(cfg["model_name"])
+    model = model_cls.from_pretrained(
         cfg["model_name"],
         trust_remote_code=True,
         dtype=dtype,
@@ -74,7 +81,7 @@ def main() -> None:
     for batch_rows in progress:
         row = batch_rows[0]
         image = load_image(repo_root, row["images"][0])
-        prompt = str(row["prompt"]).strip()
+        prompt = adjust_base_prompt(str(row["prompt"]).strip(), row["target"])
         messages = [
             {
                 "role": "user",
