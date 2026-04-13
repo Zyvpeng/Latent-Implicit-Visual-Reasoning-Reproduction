@@ -14,9 +14,9 @@ grad_accum_steps: 8
 num_epochs: 10
 warmup_ratio: 0.03
 stage: direct_sft
-train_file: data/pixmo_count_livr/counting_train.jsonl
-val_file: data/pixmo_count_livr/counting_val.jsonl
-test_file: data/pixmo_count_livr/counting_test.jsonl
+train_file: data/pixmo_count_livr_paper/counting_train.jsonl
+val_file: data/pixmo_count_livr_paper/counting_val.jsonl
+test_file: data/pixmo_count_livr_paper/counting_test.jsonl
 output_dir: outputs/counting_sft
 bf16: true
 gradient_checkpointing: true

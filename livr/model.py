@@ -250,6 +250,31 @@ class LIVRModelWrapper(torch.nn.Module):
         return self.model(**model_inputs)
 
     @torch.no_grad()
+    def collect_attentions(self, batch: dict[str, Any]) -> tuple[torch.Tensor, ...] | None:
+        device = self._model_device()
+        model_dtype = self._model_dtype()
+        input_ids = batch["input_ids"].to(device)
+        model_inputs: dict[str, Any] = {
+            "input_ids": input_ids,
+            "output_attentions": True,
+            "return_dict": True,
+            "use_cache": False,
+        }
+        if self.stage in {"sft", "direct_sft", "stage2", "livr_stage2"}:
+            model_inputs["attention_mask"] = batch["attention_mask_2d"].to(device)
+        else:
+            model_inputs["attention_mask"] = self._build_attention_mask(input_ids, batch, model_dtype)
+        if "pixel_values" in batch:
+            model_inputs["pixel_values"] = batch["pixel_values"].to(device)
+        if "image_grid_thw" in batch:
+            model_inputs["image_grid_thw"] = batch["image_grid_thw"].to(device)
+        outputs = self.model(**model_inputs)
+        attentions = getattr(outputs, "attentions", None)
+        if attentions is None:
+            return None
+        return tuple(att.detach().to(device="cpu", dtype=torch.float32) for att in attentions)
+
+    @torch.no_grad()
     def generate(self, batch: dict[str, Any], max_new_tokens: int) -> torch.Tensor:
         device = self._model_device()
         model_dtype = self._model_dtype()

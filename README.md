@@ -1,38 +1,40 @@
-# LIVR Reproduction
+# LIVR Reproduction on Qwen3-VL
 
 非官方复现项目：本仓库是对论文 **Latent Implicit Visual Reasoning (LIVR)** 的工程复现，不是论文作者官方代码。  
-Unofficial reproduction: this repository is an engineering reproduction of **Latent Implicit Visual Reasoning (LIVR)**, not the official code from the paper authors.
+Unofficial reproduction: this repository is an engineering reproduction of **Latent Implicit Visual Reasoning (LIVR)**, not the official implementation from the paper authors.
 
-当前基座模型为 `Qwen3-VL-4B-Instruct`。  
-The current base model is `Qwen3-VL-4B-Instruct`.
-
-当前优先支持的任务是 `Counting / PixMo-Count`。  
-The current primary supported task is `Counting / PixMo-Count`.
+当前主线基座模型为 `Qwen3-VL-4B-Instruct`，当前重点任务为 `Counting / PixMo-Count`。  
+The current main backbone is `Qwen3-VL-4B-Instruct`, and the current primary task is `Counting / PixMo-Count`.
 
 ## 项目目标 | Goal
 
-- 用尽量轻量、可调试的方式复现 LIVR 的核心机制。  
-  Reproduce the core LIVR mechanism in a lightweight and debuggable way.
-- 优先保证训练逻辑、mask 机制、latent token 训练方式和 SFT 范式正确。  
-  Prioritize correct training logic, mask behavior, latent-token training, and SFT protocol.
-- 先跑通单任务 counting，再扩展到其他任务。  
-  First make single-task counting work end-to-end, then extend to more tasks.
+- 用尽量轻量、可调试的 PyTorch + Hugging Face + PEFT 代码复现 LIVR 核心机制。  
+  Reproduce the core LIVR mechanism with a lightweight and debuggable PyTorch + Hugging Face + PEFT codebase.
+- 优先保证训练协议、latent token 机制、mask 逻辑和 SFT 范式正确。  
+  Prioritize correct training protocol, latent-token behavior, mask logic, and SFT protocol.
+- 先在单任务 counting 上跑通，再扩展到其他任务。  
+  First make single-task counting work end-to-end, then extend to other tasks.
 
-## 当前实现范围 | Current Scope
+## 当前范围 | Current Scope
 
 - 基座模型：`Qwen3-VL-4B-Instruct`  
   Base model: `Qwen3-VL-4B-Instruct`
-- 任务：`Counting / PixMo-Count`  
-  Task: `Counting / PixMo-Count`
+- 当前主任务：`Counting / PixMo-Count`  
+  Current main task: `Counting / PixMo-Count`
 - 训练模式：
   - `direct_sft`
   - `livr_stage1`
   - `livr_stage2`
+- 评测入口：
+  - 原始官方风格 Qwen3-VL baseline
+  - SFT checkpoint
+  - LIVR Stage 1 checkpoint
+  - LIVR Stage 2 checkpoint
 
 ## 与论文对齐的核心点 | Paper-Faithful Core
 
-已实现的核心机制：  
-Implemented core mechanisms:
+已实现的 LIVR 核心机制：  
+Implemented LIVR core mechanisms:
 
 1. latent tokens 追加在输入中，不是自回归生成。  
    Latent tokens are appended to the input and are not autoregressively generated.
@@ -46,8 +48,8 @@ Implemented core mechanisms:
      latent queries can still attend to image keys
 3. Stage 2 恢复标准 causal mask。  
    Stage 2 restores the standard causal mask.
-4. loss 只在 assistant answer span 上计算。  
-   Loss is computed only on the assistant answer span.
+4. loss 在 assistant answer span 上计算，并监督结束标记 `<|im_end|>`。  
+   Loss is computed on the assistant answer span, including the `<|im_end|>` end marker.
 5. 冻结 vision encoder 和 multimodal projector。  
    The vision encoder and multimodal projector are frozen.
 6. LoRA 只打在 language backbone 的 attention + MLP 模块上。  
@@ -57,17 +59,21 @@ Implemented core mechanisms:
 8. 默认 latent 配置为 `K=16`，非共享 latent tokens：`<livr_0> ... <livr_15>`。  
    The default latent setup is `K=16` with unshared latent tokens: `<livr_0> ... <livr_15>`.
 
-## SFT 范式说明 | SFT Protocol
+## SFT 范式 | SFT Protocol
 
-当前训练和推理都统一使用 `Qwen3-VL` 的 chat template。  
-Training and inference now consistently use the `Qwen3-VL` chat template.
+当前训练和推理统一遵循 `Qwen3-VL` 的 chat template。  
+Training and inference consistently follow the `Qwen3-VL` chat template.
 
-- 不再使用额外自定义 system prompt。  
+- 不额外注入自定义 system prompt。  
   No extra custom system prompt is injected.
-- 训练输入与推理输入保持前缀一致。  
-  The training input and inference input share the same prefix format.
-- 训练时监督 assistant answer 以及结束标记 `<|im_end|>`。  
-  During training, the assistant answer and the `<|im_end|>` end marker are supervised.
+- 训练输入和推理输入保持前缀一致。  
+  Training and inference share the same prompt prefix.
+- 训练监督 assistant answer 和 `<|im_end|>`。  
+  Training supervises both the assistant answer and `<|im_end|>`.
+- `direct_sft` 不使用 latent tokens。  
+  `direct_sft` does not use latent tokens.
+- `livr_stage1 / livr_stage2` 使用 `<livr_0> ... <livr_15>`，且 latent token 之间不插入空格。  
+  `livr_stage1 / livr_stage2` use `<livr_0> ... <livr_15>` with no spaces inserted between latent tokens.
 
 ## 目录结构 | File Tree
 
@@ -75,6 +81,7 @@ Training and inference now consistently use the `Qwen3-VL` chat template.
 LIVR/
 ├── README.md
 ├── requirements.txt
+├── 2512.21218v1.pdf
 ├── configs/
 │   ├── counting_qwen3vl_sft.yaml
 │   ├── counting_qwen3vl_livr_stage1.yaml
@@ -82,13 +89,21 @@ LIVR/
 │   ├── localization_qwen3vl_sft.yaml
 │   └── localization_qwen3vl_livr.yaml
 ├── data/
-│   └── pixmo_count/
+│   ├── pixmo_count_official/        # 官方 metadata + 原始图片下载目录
+│   ├── pixmo_count_livr/            # 当前默认 counting split
+│   ├── pixmo_count_livr_paper/      # 预留：更接近论文的去重 split
+│   ├── localization_train.jsonl
+│   └── localization_val.jsonl
 ├── livr/
 │   ├── attention_mask.py
+│   ├── build_pixmo_count_livr_split.py
+│   ├── build_pixmo_count_livr_paper_split.py
 │   ├── data.py
 │   ├── eval.py
+│   ├── eval_qwen3vl_base_official.py
 │   ├── latent_tokens.py
 │   ├── model.py
+│   ├── prepare_pixmo_count.py
 │   ├── train.py
 │   └── utils.py
 ├── scripts/
@@ -96,42 +111,112 @@ LIVR/
 │   ├── train_counting_qwen3vl_livr_stage1_torchrun.sh
 │   ├── train_counting_qwen3vl_livr_stage2_torchrun.sh
 │   ├── eval_counting_qwen3vl_base.sh
+│   ├── eval_counting_qwen3vl_base_official.sh
 │   ├── eval_counting_qwen3vl_sft.sh
-│   └── ...
+│   ├── eval_counting_qwen3vl_stage1.sh
+│   └── eval_counting_qwen3vl_stage2.sh
 └── tests/
     ├── test_mask.py
     ├── test_loss.py
     └── test_latent_rows_trainable.py
 ```
 
-## 环境安装 | Install
+## 环境安装 | Environment
+
+### Python 依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 数据准备 | Data Preparation
+### 与当前 `agent` 环境对齐的 PyTorch 安装
 
-当前 counting 实验使用 `PixMo-Count` 整理后的 JSONL 格式数据。  
-Current counting experiments use `PixMo-Count` data organized in JSONL format.
+当前对齐版本是 `torch 2.4.0 + CUDA 12.1`。  
+The currently aligned version is `torch 2.4.0 + CUDA 12.1`.
 
-示例格式：  
-Example format:
-
-```json
-{
-  "id": "train-0",
-  "images": ["pixmo_count/images/train_0.jpg"],
-  "prompt": "Count the number of objects in the image. Answer with a single integer only.",
-  "target": "4",
-  "task": "counting",
-  "object_name": "objects"
-}
+```bash
+/home/ypzheng/miniconda3/bin/conda create -n livr python=3.10 -y
+/home/ypzheng/miniconda3/bin/conda install -n livr \
+  pytorch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 pytorch-cuda=12.1 \
+  -c pytorch -c nvidia -y
 ```
 
-## 训练命令 | Training
+## 数据目录与当前默认 split | Data Layout and Current Default Split
 
-### 1. Direct SFT
+### 1. 官方下载目录
+
+`data/pixmo_count_official/` 用于保存官方 metadata 和按 URL 下载的图片。  
+`data/pixmo_count_official/` stores the official metadata and URL-downloaded images.
+
+### 2. 当前默认训练/评测 split
+
+当前 counting 配置默认使用：  
+The current counting configs use:
+
+- `data/pixmo_count_livr/counting_train.jsonl`
+- `data/pixmo_count_livr/counting_val.jsonl`
+- `data/pixmo_count_livr/counting_test.jsonl`
+
+当前这套 split 的特点：  
+Characteristics of the current split:
+
+- `train = 1000`
+- `val = 524`
+- `test = 467`
+- train 在 `count ∈ [2, 10]` 上近均衡  
+  the train split is nearly balanced over `count ∈ [2, 10]`
+- train 进一步做了 `count + label` 的轮转均衡，降低了 `people` 过度占比  
+  the train split also uses `count + label` round-robin balancing to reduce `people` dominance
+
+### 3. 更接近论文的去重 split
+
+`livr/build_pixmo_count_livr_paper_split.py` 提供了更接近论文描述的脚本：  
+`livr/build_pixmo_count_livr_paper_split.py` provides a more paper-aligned split builder:
+
+- 读取官方 `train / validation / test`
+- 只保留本地实际下载成功的样本
+- 对 `train + validation` 和官方 `test` 做近重复过滤
+- 过滤手段包括：CLIP embeddings、pHash、SSIM
+- 从过滤后的 `train` 中抽取 `1000` 条训练样本
+
+运行示例：  
+Example:
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+python -m livr.build_pixmo_count_livr_paper_split \
+  --input-dir data/pixmo_count_official \
+  --output-dir data/pixmo_count_livr_paper \
+  --train-size 1000 \
+  --seed 42
+```
+
+## 训练配置 | Default Counting Config
+
+当前 counting 配置默认包含：  
+Current counting configs include:
+
+- `max_length: 4096`
+- `image_min_pixels: 3136`
+- `image_max_pixels: 1048576`
+- `per_device_batch_size: 1`
+- `grad_accum_steps: 8`
+- `bf16: true`
+- `gradient_checkpointing: true`
+- `train_val_subset_size: 10`
+- `compute_val_accuracy: true`
+
+说明：  
+Notes:
+
+- `image_min_pixels / image_max_pixels` 用于控制 Qwen3-VL 视觉 token 长度，避免图像 token 过长触发 processor truncation mismatch。  
+  `image_min_pixels / image_max_pixels` are used to cap Qwen3-VL visual token length and avoid processor truncation mismatch.
+- 训练时每个 epoch 仅在 `10` 条 validation 样本上计算 `val_loss` 和 `val_acc`，并逐条打印预测。  
+  Each epoch evaluates `val_loss` and `val_acc` on only `10` validation examples and prints each prediction.
+
+## 训练 | Training
+
+### Direct SFT
 
 ```bash
 cd /home/ypzheng/latent_reasoning/LIVR
@@ -139,7 +224,7 @@ CUDA_VISIBLE_DEVICES=8,9 MASTER_PORT=29511 \
 bash scripts/train_counting_qwen3vl_sft_torchrun.sh
 ```
 
-### 2. LIVR Stage 1
+### LIVR Stage 1
 
 ```bash
 cd /home/ypzheng/latent_reasoning/LIVR
@@ -147,7 +232,7 @@ CUDA_VISIBLE_DEVICES=8,9 MASTER_PORT=29511 \
 bash scripts/train_counting_qwen3vl_livr_stage1_torchrun.sh
 ```
 
-### 3. LIVR Stage 2
+### LIVR Stage 2
 
 ```bash
 cd /home/ypzheng/latent_reasoning/LIVR
@@ -155,28 +240,38 @@ CUDA_VISIBLE_DEVICES=8,9 MASTER_PORT=29511 \
 bash scripts/train_counting_qwen3vl_livr_stage2_torchrun.sh
 ```
 
-说明：  
-Notes:
+训练 schedule：  
+Training schedule:
 
-- single-task setting 使用 `1k` 训练样本。  
-  The single-task setting uses `1k` training examples.
-- SFT 默认训练 `10` 个 epochs。  
-  SFT runs for `10` epochs by default.
-- LIVR 默认训练 `4 + 6` 个 epochs。  
-  LIVR runs for `4 + 6` epochs by default.
-- 当前训练默认会计算 `val_loss` 和 `val_acc`，并保存 `best` checkpoint。  
-  Training computes `val_loss` and `val_acc` by default, and saves the `best` checkpoint.
+- single-task setting 使用 `1000` 条训练样本  
+  the single-task setting uses `1000` training examples
+- `direct_sft` 默认训练 `10` 个 epochs  
+  `direct_sft` runs for `10` epochs by default
+- `livr_stage1` 默认训练 `4` 个 epochs  
+  `livr_stage1` runs for `4` epochs by default
+- `livr_stage2` 默认训练 `6` 个 epochs  
+  `livr_stage2` runs for `6` epochs by default
 
-## 评测命令 | Evaluation
+## 评测 | Evaluation
 
-### 原始 base model
+### 1. 原始 Qwen3-VL baseline
+
+这是完全绕开 LIVR wrapper 的官方风格 baseline。  
+This is the official-style baseline that bypasses the LIVR wrapper entirely.
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+CUDA_VISIBLE_DEVICES=8 bash scripts/eval_counting_qwen3vl_base_official.sh
+```
+
+### 2. 当前通用 base eval
 
 ```bash
 cd /home/ypzheng/latent_reasoning/LIVR
 CUDA_VISIBLE_DEVICES=8 bash scripts/eval_counting_qwen3vl_base.sh
 ```
 
-### SFT checkpoint
+### 3. SFT checkpoint
 
 ```bash
 cd /home/ypzheng/latent_reasoning/LIVR
@@ -192,23 +287,14 @@ CUDA_VISIBLE_DEVICES=8 \
 bash scripts/eval_counting_qwen3vl_sft.sh outputs/counting_sft/best
 ```
 
-### LIVR Stage 1 checkpoint
+### 4. LIVR Stage 1 checkpoint
 
 ```bash
 cd /home/ypzheng/latent_reasoning/LIVR
 CUDA_VISIBLE_DEVICES=8 bash scripts/eval_counting_qwen3vl_stage1.sh
 ```
 
-指定 checkpoint：  
-Specify a checkpoint:
-
-```bash
-cd /home/ypzheng/latent_reasoning/LIVR
-CUDA_VISIBLE_DEVICES=8 \
-bash scripts/eval_counting_qwen3vl_stage1.sh outputs/counting_livr_stage1/best
-```
-
-### LIVR Stage 2 checkpoint
+### 5. LIVR Stage 2 checkpoint
 
 ```bash
 cd /home/ypzheng/latent_reasoning/LIVR
@@ -224,8 +310,8 @@ CUDA_VISIBLE_DEVICES=8 \
 bash scripts/eval_counting_qwen3vl_stage2.sh outputs/counting_livr_stage2/best
 ```
 
-如果你想固定评测某一轮，比如 `epoch_5`：  
-If you want to evaluate a specific epoch such as `epoch_5`:
+固定评测某一轮，例如 `epoch_5`：  
+Evaluate a specific epoch, for example `epoch_5`:
 
 ```bash
 cd /home/ypzheng/latent_reasoning/LIVR
@@ -233,30 +319,89 @@ CUDA_VISIBLE_DEVICES=8 \
 bash scripts/eval_counting_qwen3vl_stage2.sh outputs/counting_livr_stage2/epoch_5
 ```
 
-当前 `livr.eval` 会输出：  
-Current `livr.eval` writes:
+默认评测会：
+- 打印每条样本的 `id / target / pred / raw_pred / correct`
+- 显示实时 `tqdm` 进度和累计 `acc`
+- 输出 `predictions.jsonl`
 
-- `accuracy=...`
-- `predictions.jsonl`
+By default, evaluation:
+- prints `id / target / pred / raw_pred / correct` for each sample
+- shows live `tqdm` progress and running `acc`
+- writes `predictions.jsonl`
 
-## 当前已知说明 | Current Notes
+## Stage 2 可选 attention 导出 | Optional Stage 2 Attention Export
 
-- 本仓库仍处于持续整理阶段。  
-  This repository is still being actively cleaned up.
-- counting 是当前主要验证任务，localization 配置仍保留为后续扩展入口。  
-  Counting is the main validated task at the moment; localization configs remain as future extensions.
-- 若使用 DDP 训练，CPU 图像预处理可能成为瓶颈。  
-  With DDP training, CPU-side image preprocessing may become a bottleneck.
-- 若多卡训练出现同步超时，可优先增大 DDP timeout、提高 dataloader workers，或预缓存预处理结果。  
-  If multi-GPU training hits synchronization timeouts, first increase the DDP timeout, raise dataloader workers, or pre-cache preprocessing results.
+`stage2` 评测支持可选地实时保存每个 latent token 对视觉 token 的 attention map。  
+Stage-2 evaluation optionally supports real-time export of each latent token's attention map over visual tokens.
 
-## 尚未完全锁死的超参数 | Configurable Hyperparameters
+默认关闭。开启方式：  
+It is disabled by default. Enable it with:
 
-以下参数仍保持 YAML 可配置：  
-The following hyperparameters remain configurable in YAML:
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+SAVE_LATENT_ATTN=1 CUDA_VISIBLE_DEVICES=8 \
+bash scripts/eval_counting_qwen3vl_stage2.sh
+```
 
+指定保存目录：  
+Specify a custom save directory:
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+SAVE_LATENT_ATTN=1 LATENT_ATTN_DIR=outputs/counting_livr_stage2_eval/my_latent_attn \
+CUDA_VISIBLE_DEVICES=8 \
+bash scripts/eval_counting_qwen3vl_stage2.sh
+```
+
+保存内容包括：  
+Saved payload includes:
+
+- `latent_token_ids`
+- `latent_token_text`
+- `image_span`
+- `latent_span`
+- `image_grid_thw`
+- `last_layer_mean_heads`
+- `avg_layers_mean_heads`
+- 以及可恢复时的 2D attention maps  
+  and 2D attention maps when recoverable
+
+## 测试 | Tests
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+python -m pytest tests
+```
+
+当前测试覆盖：
+- `test_mask.py`
+- `test_loss.py`
+- `test_latent_rows_trainable.py`
+
+## 当前注意事项 | Current Notes
+
+- 旧 checkpoint 中，凡是在修复 `pixel_values` 维度 bug 之前训练得到的结果都不可信。  
+  Any checkpoint trained before the `pixel_values` shape fix should be treated as invalid.
+- 当前默认 counting split 是 `data/pixmo_count_livr/`，不是最早的旧 `pixmo_count/` 目录。  
+  The current default counting split is `data/pixmo_count_livr/`, not the older `pixmo_count/` directory.
+- `pixmo-count` 官方有一部分 URL 已失效，因此最终可用的 `val/test` 样本数会小于官方 metadata 总数。  
+  Some official `pixmo-count` URLs are dead, so the final usable `val/test` sizes are smaller than the raw metadata counts.
+- 多卡训练时，CPU 侧图像预处理仍可能成为瓶颈。  
+  CPU-side image preprocessing can still be a bottleneck during multi-GPU training.
+
+## 可配置超参数 | Configurable Hyperparameters
+
+以下参数保持 YAML 可配置：  
+The following remain configurable in YAML:
+
+- `model_name`
 - `max_length`
+- `image_min_pixels`
+- `image_max_pixels`
 - `num_latents`
+- `lora_r`
+- `lora_alpha`
+- `lora_dropout`
 - `learning_rate`
 - `weight_decay`
 - `per_device_batch_size`
@@ -264,26 +409,15 @@ The following hyperparameters remain configurable in YAML:
 - `grad_accum_steps`
 - `num_epochs`
 - `warmup_ratio`
-- `lora_r`
-- `lora_alpha`
-- `lora_dropout`
+- `stage`
+- `train_file`
+- `val_file`
+- `test_file`
+- `output_dir`
 - `bf16`
 - `gradient_checkpointing`
 - `eval_max_new_tokens`
 - `compute_val_accuracy`
-- `init_checkpoint`
+- `train_val_subset_size`
+- `label_assistant_end`
 
-## 声明 | Disclaimer
-
-这是一个非官方复现仓库。  
-This is an unofficial reproduction repository.
-
-如果你需要严格对照论文结果，请同时关注：  
-If you need strict result matching with the paper, you should additionally check:
-
-- 数据构造是否与论文原始版本完全一致  
-  whether the data construction exactly matches the paper
-- 训练超参数是否与论文附录完全一致  
-  whether the optimization hyperparameters exactly match the appendix
-- 评测协议是否与论文原始脚本完全一致  
-  whether the evaluation protocol exactly matches the original scripts
