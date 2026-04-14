@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import random
 from collections import defaultdict
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from PIL import Image, ImageFilter
 from tqdm import tqdm
 from transformers import AutoImageProcessor, AutoModel
@@ -54,6 +56,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument('--clip-batch-size', type=int, default=32)
+    parser.add_argument(
+        '--clip-cache-dir',
+        default=None,
+        help='Optional directory used to cache CLIP embeddings as .pt files.',
+    )
     parser.add_argument('--clip-top-k', type=int, default=10)
     parser.add_argument('--clip-cosine-threshold', type=float, default=0.92)
     parser.add_argument('--phash-threshold', type=int, default=8)
@@ -98,15 +105,86 @@ def load_split(meta_path: Path, images_dir: Path, split: str) -> list[Row]:
     return rows
 
 
+def distributed_enabled() -> bool:
+    return int(os.environ.get('WORLD_SIZE', '1')) > 1
+
+
+def distributed_rank() -> int:
+    return int(os.environ.get('RANK', '0'))
+
+
+def distributed_local_rank() -> int:
+    return int(os.environ.get('LOCAL_RANK', '0'))
+
+
+def distributed_world_size() -> int:
+    return int(os.environ.get('WORLD_SIZE', '1'))
+
+
+def is_main_process() -> bool:
+    return distributed_rank() == 0
+
+
+def maybe_init_distributed(device: str) -> None:
+    if not distributed_enabled() or dist.is_initialized():
+        return
+    backend = 'nccl' if device.startswith('cuda') else 'gloo'
+    if backend == 'nccl':
+        torch.cuda.set_device(distributed_local_rank())
+    dist.init_process_group(backend=backend)
+
+
+def maybe_destroy_distributed() -> None:
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def distributed_barrier() -> None:
+    if dist.is_initialized():
+        dist.barrier()
+
+
+def resolve_worker_device(device: str) -> str:
+    if not distributed_enabled():
+        return device
+    if device.startswith('cuda'):
+        return f'cuda:{distributed_local_rank()}'
+    return device
+
+
+def clip_cache_file(cache_dir: str | None, model_name: str, image_paths: list[str]) -> Path | None:
+    if cache_dir is None:
+        return None
+    digest = hashlib.sha1()
+    digest.update(model_name.encode('utf-8'))
+    digest.update(b'\0')
+    for image_path in image_paths:
+        digest.update(str(Path(image_path).resolve()).encode('utf-8'))
+        digest.update(b'\0')
+    cache_root = Path(cache_dir)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    return cache_root / f'{digest.hexdigest()}.pt'
+
+
 def compute_clip_embeddings(
     image_paths: list[str],
     model_name: str,
     batch_size: int,
     device: str,
+    cache_dir: str | None = None,
 ) -> torch.Tensor:
+    cache_file = clip_cache_file(cache_dir, model_name, image_paths)
+    if cache_file is not None and cache_file.exists():
+        return torch.load(cache_file, map_location='cpu')
+
+    maybe_init_distributed(device)
+    worker_device = resolve_worker_device(device)
+    rank = distributed_rank()
+    world_size = distributed_world_size()
+
     processor = AutoImageProcessor.from_pretrained(model_name)
     try:
-        model = AutoModel.from_pretrained(model_name, use_safetensors=True).eval().to(device)
+        model = AutoModel.from_pretrained(model_name, use_safetensors=True).eval().to(worker_device)
     except Exception as exc:
         raise ValueError(
             'Failed to load the image similarity model with safetensors. '
@@ -114,17 +192,55 @@ def compute_clip_embeddings(
             'Use a safetensors-backed checkpoint such as '
             '`google/siglip-base-patch16-224`, or upgrade torch to >=2.6.'
         ) from exc
+
+    local_indices = list(range(rank, len(image_paths), world_size))
+    local_paths = [image_paths[idx] for idx in local_indices]
     outputs: list[torch.Tensor] = []
-    for start in tqdm(range(0, len(image_paths), batch_size), desc='clip_embed', leave=False):
-        batch_paths = image_paths[start:start + batch_size]
+    iterator = range(0, len(local_paths), batch_size)
+    if not distributed_enabled() or is_main_process():
+        iterator = tqdm(iterator, desc='clip_embed', leave=False)
+    for start in iterator:
+        batch_paths = local_paths[start:start + batch_size]
         images = [Image.open(p).convert('RGB') for p in batch_paths]
         inputs = processor(images=images, return_tensors='pt')
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+        inputs = {k: v.to(worker_device) for k, v in inputs.items()}
         with torch.no_grad():
             image_features = model.get_image_features(**inputs)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         outputs.append(image_features.cpu())
-    return torch.cat(outputs, dim=0)
+    local_embeddings = torch.cat(outputs, dim=0) if outputs else None
+
+    if not distributed_enabled():
+        if local_embeddings is None:
+            raise ValueError('No embeddings were produced for the provided image paths.')
+        if cache_file is not None:
+            torch.save(local_embeddings, cache_file)
+        return local_embeddings
+
+    payload = {
+        'indices': local_indices,
+        'embeddings': local_embeddings,
+    }
+    gathered: list[dict[str, Any]] | None = [None] * world_size if is_main_process() else None
+    dist.gather_object(payload, gathered, dst=0)
+
+    if is_main_process():
+        first_nonempty = next(
+            item for item in gathered if item['embeddings'] is not None and item['embeddings'].numel() > 0
+        )
+        dim = int(first_nonempty['embeddings'].shape[1])
+        full_embeddings = torch.empty((len(image_paths), dim), dtype=first_nonempty['embeddings'].dtype)
+        for item in gathered:
+            embeddings = item['embeddings']
+            if embeddings is None or embeddings.numel() == 0:
+                continue
+            full_embeddings[item['indices']] = embeddings
+        if cache_file is not None:
+            torch.save(full_embeddings, cache_file)
+    distributed_barrier()
+    if cache_file is None:
+        raise ValueError('Distributed CLIP extraction requires clip_cache_dir to be set.')
+    return torch.load(cache_file, map_location='cpu')
 
 
 def _dct_matrix(n: int) -> np.ndarray:
@@ -184,6 +300,7 @@ def find_near_duplicates(
     clip_model_name: str,
     clip_batch_size: int,
     device: str,
+    clip_cache_dir: str | None,
     clip_top_k: int,
     clip_cosine_threshold: float,
     phash_threshold: int,
@@ -192,8 +309,20 @@ def find_near_duplicates(
     if not candidate_rows or not test_rows:
         return set(), []
 
-    candidate_emb = compute_clip_embeddings([r.image_path for r in candidate_rows], clip_model_name, clip_batch_size, device)
-    test_emb = compute_clip_embeddings([r.image_path for r in test_rows], clip_model_name, clip_batch_size, device)
+    candidate_emb = compute_clip_embeddings(
+        [r.image_path for r in candidate_rows],
+        clip_model_name,
+        clip_batch_size,
+        device,
+        cache_dir=clip_cache_dir,
+    )
+    test_emb = compute_clip_embeddings(
+        [r.image_path for r in test_rows],
+        clip_model_name,
+        clip_batch_size,
+        device,
+        cache_dir=clip_cache_dir,
+    )
     sims = candidate_emb @ test_emb.T
     top_k = min(int(clip_top_k), test_emb.shape[0])
     top_vals, top_idx = torch.topk(sims, k=top_k, dim=1)
@@ -304,6 +433,7 @@ def main() -> None:
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    clip_cache_dir = args.clip_cache_dir or str(output_dir / 'clip_cache')
     images_dir = input_dir / 'images'
 
     train_rows = load_split(input_dir / 'train_metadata.jsonl', images_dir, 'train')
@@ -316,6 +446,7 @@ def main() -> None:
         clip_model_name=args.clip_model_name,
         clip_batch_size=args.clip_batch_size,
         device=args.device,
+        clip_cache_dir=clip_cache_dir,
         clip_top_k=args.clip_top_k,
         clip_cosine_threshold=args.clip_cosine_threshold,
         phash_threshold=args.phash_threshold,
@@ -330,44 +461,47 @@ def main() -> None:
     val_jsonl = convert_rows(filtered_val, 'validation')
     test_jsonl = convert_rows(test_rows, 'test')
 
-    save_jsonl(str(output_dir / 'counting_train.jsonl'), train_jsonl)
-    save_jsonl(str(output_dir / 'counting_val.jsonl'), val_jsonl)
-    save_jsonl(str(output_dir / 'counting_test.jsonl'), test_jsonl)
-    save_jsonl(str(output_dir / 'dedup_reports.jsonl'), duplicate_reports)
+    if is_main_process():
+        save_jsonl(str(output_dir / 'counting_train.jsonl'), train_jsonl)
+        save_jsonl(str(output_dir / 'counting_val.jsonl'), val_jsonl)
+        save_jsonl(str(output_dir / 'counting_test.jsonl'), test_jsonl)
+        save_jsonl(str(output_dir / 'dedup_reports.jsonl'), duplicate_reports)
 
-    by_count = defaultdict(int)
-    for row in train_jsonl:
-        by_count[int(row['target'])] += 1
+        by_count = defaultdict(int)
+        for row in train_jsonl:
+            by_count[int(row['target'])] += 1
 
-    manifest = {
-        'dataset': 'allenai/pixmo-count',
-        'paper_alignment': {
-            'train_source': 'official train split',
-            'validation_source': 'official validation split',
-            'test_source': 'official test split',
-            'train_count_range': [args.min_count, args.max_count],
-            'train_sampling': 'approximately uniform over counts',
-            'deduplication': 'CLIP prefilter + pHash + SSIM against official test',
-        },
-        'source_dir': str(input_dir),
-        'clip_model_name': args.clip_model_name,
-        'clip_top_k': args.clip_top_k,
-        'clip_cosine_threshold': args.clip_cosine_threshold,
-        'phash_threshold': args.phash_threshold,
-        'ssim_threshold': args.ssim_threshold,
-        'train_candidates_before_dedup': len(train_rows),
-        'validation_before_dedup': len(val_rows),
-        'test_size': len(test_jsonl),
-        'duplicates_removed_train_plus_val': len(duplicate_keys),
-        'train_size': len(train_jsonl),
-        'val_size': len(val_jsonl),
-        'test_size_after_url_filter': len(test_jsonl),
-        'train_count_histogram': {str(k): by_count[k] for k in sorted(by_count)},
-        'seed': args.seed,
-    }
-    with open(output_dir / 'manifest.json', 'w', encoding='utf-8') as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        manifest = {
+            'dataset': 'allenai/pixmo-count',
+            'paper_alignment': {
+                'train_source': 'official train split',
+                'validation_source': 'official validation split',
+                'test_source': 'official test split',
+                'train_count_range': [args.min_count, args.max_count],
+                'train_sampling': 'approximately uniform over counts',
+                'deduplication': 'CLIP prefilter + pHash + SSIM against official test',
+            },
+            'source_dir': str(input_dir),
+            'clip_model_name': args.clip_model_name,
+            'clip_cache_dir': clip_cache_dir,
+            'clip_top_k': args.clip_top_k,
+            'clip_cosine_threshold': args.clip_cosine_threshold,
+            'phash_threshold': args.phash_threshold,
+            'ssim_threshold': args.ssim_threshold,
+            'train_candidates_before_dedup': len(train_rows),
+            'validation_before_dedup': len(val_rows),
+            'test_size': len(test_jsonl),
+            'duplicates_removed_train_plus_val': len(duplicate_keys),
+            'train_size': len(train_jsonl),
+            'val_size': len(val_jsonl),
+            'test_size_after_url_filter': len(test_jsonl),
+            'train_count_histogram': {str(k): by_count[k] for k in sorted(by_count)},
+            'seed': args.seed,
+        }
+        with open(output_dir / 'manifest.json', 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    maybe_destroy_distributed()
 
 
 if __name__ == '__main__':

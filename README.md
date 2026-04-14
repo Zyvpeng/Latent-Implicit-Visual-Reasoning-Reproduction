@@ -109,6 +109,8 @@ LIVR/
 │   ├── train.py
 │   └── utils.py
 ├── scripts/
+│   ├── build_pixmo_count_clipfar_split_torchrun.sh
+│   ├── build_pixmo_count_livr_paper_split_torchrun.sh
 │   ├── train_counting_qwen3vl_sft_torchrun.sh
 │   ├── train_counting_qwen3vl_livr_stage1_torchrun.sh
 │   ├── train_counting_qwen3vl_livr_stage2_torchrun.sh
@@ -192,6 +194,114 @@ python -m livr.build_pixmo_count_livr_paper_split \
   --train-size 1000 \
   --seed 42
 ```
+
+### 4. 用 `cuda:8,9` 多卡提取 CLIP embedding
+
+现在 `build_pixmo_count_livr_paper_split.py` 和 `build_pixmo_count_clipfar_split.py` 都支持：
+
+- `torchrun` 多进程并行提取 CLIP embedding
+- embedding 缓存到 `.pt`
+- 下一次相同图像列表 + 相同 CLIP 模型时直接复用缓存
+
+#### 4.1 构建 `clipfar` split
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+conda activate agent
+CUDA_VISIBLE_DEVICES=8,9 MASTER_PORT=29631 \
+bash scripts/build_pixmo_count_clipfar_split_torchrun.sh
+```
+
+这条脚本默认等价于：
+
+```bash
+torchrun \
+  --nproc_per_node=2 \
+  --master_port=29631 \
+  -m livr.build_pixmo_count_clipfar_split \
+  --input-dir data/pixmo_count_official \
+  --output-dir data/pixmo_count_clipfar \
+  --clip-cache-dir /tmp/livr_clip_cache/pixmo_count_clipfar \
+  --train-size 1000 \
+  --seed 42 \
+  --min-count 2 \
+  --max-count 10 \
+  --remove-near-duplicates
+```
+
+#### 4.2 重建论文风格 split
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+conda activate agent
+CUDA_VISIBLE_DEVICES=8,9 MASTER_PORT=29632 \
+bash scripts/build_pixmo_count_livr_paper_split_torchrun.sh
+```
+
+这条脚本默认等价于：
+
+```bash
+torchrun \
+  --nproc_per_node=2 \
+  --master_port=29632 \
+  -m livr.build_pixmo_count_livr_paper_split \
+  --input-dir data/pixmo_count_official \
+  --output-dir data/pixmo_count_livr_paper \
+  --clip-cache-dir /tmp/livr_clip_cache/pixmo_count_livr_paper \
+  --train-size 1000 \
+  --seed 42 \
+  --min-count 2 \
+  --max-count 10
+```
+
+#### 4.3 这些参数分别是什么意思
+
+- `CUDA_VISIBLE_DEVICES=8,9`
+  只让当前命令看到物理 GPU `8` 和 `9`。脚本内部的两个进程会分别使用可见设备里的 `cuda:0` 和 `cuda:1`，也就是物理 `8` 和 `9`。
+- `MASTER_PORT=29631` 或 `29632`
+  给 `torchrun` 的分布式通信指定端口。同一台机器上不要和别的 `torchrun` 任务冲突；冲突就换一个没被占用的端口。
+- `--nproc_per_node=2`
+  启动 `2` 个进程，对应 `2` 张可见 GPU。如果你只给一张卡，就把它改成 `1`。
+- `--input-dir data/pixmo_count_official`
+  官方 metadata 和图片所在目录。这里必须包含：
+  `train_metadata.jsonl`、`validation_metadata.jsonl`、`test_metadata.jsonl` 和 `images/`。
+- `--output-dir`
+  最终 split 的输出目录。
+  `clipfar` 默认写到 `data/pixmo_count_clipfar`；
+  paper split 默认写到 `data/pixmo_count_livr_paper`。
+- `--clip-cache-dir`
+  embedding 缓存目录。第一次会写入 `.pt`，后面只要图像列表和模型名没变，就直接读缓存，不再重提。
+- `--train-size 1000`
+  最终训练集大小。
+- `--seed 42`
+  采样随机种子。
+- `--min-count 2 --max-count 10`
+  只从计数区间 `[2, 10]` 里选训练样本。
+- `--remove-near-duplicates`
+  只在 `clipfar` 脚本里默认打开。会先做一轮 paper-style `CLIP + pHash + SSIM` 去重，再从剩余 train 里挑和 test 最远的样本。
+
+#### 4.4 如果你想改默认值
+
+脚本里这几个环境变量都可以直接覆写：
+
+```bash
+cd /home/ypzheng/latent_reasoning/LIVR
+conda activate agent
+CUDA_VISIBLE_DEVICES=8,9 \
+MASTER_PORT=29641 \
+NPROC_PER_NODE=2 \
+CACHE_DIR=/tmp/my_clip_cache \
+bash scripts/build_pixmo_count_clipfar_split_torchrun.sh
+```
+
+含义：
+
+- `NPROC_PER_NODE`
+  覆盖脚本里的 `--nproc_per_node`
+- `MASTER_PORT`
+  覆盖脚本里的分布式端口
+- `CACHE_DIR`
+  覆盖脚本里的 `--clip-cache-dir`
 
 ## 训练配置 | Default Counting Config
 

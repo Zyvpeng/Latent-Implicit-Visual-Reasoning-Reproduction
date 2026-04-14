@@ -38,6 +38,9 @@ LANGUAGE_LORA_TARGETS = [
     "down_proj",
 ]
 
+LANGUAGE_LORA_EXCLUDE_MODULES = r".*(visual|vision|multi_modal_projector|merger).*"
+EXCLUDED_LORA_PARAM_MARKERS = (".visual.", ".vision.", ".multi_modal_projector.", ".merger.")
+
 
 @dataclass
 class LIVRBundle:
@@ -83,8 +86,25 @@ def build_lora_model(model: torch.nn.Module, cfg: dict[str, Any]) -> torch.nn.Mo
         lora_alpha=cfg["lora_alpha"],
         lora_dropout=cfg["lora_dropout"],
         target_modules=LANGUAGE_LORA_TARGETS,
+        exclude_modules=LANGUAGE_LORA_EXCLUDE_MODULES,
     )
-    return get_peft_model(model, peft_config)
+    peft_model = get_peft_model(model, peft_config)
+    _assert_no_excluded_trainable_params(peft_model)
+    return peft_model
+
+
+def _assert_no_excluded_trainable_params(model: torch.nn.Module) -> None:
+    blocked = [
+        name
+        for name, param in model.named_parameters()
+        if param.requires_grad and any(marker in name for marker in EXCLUDED_LORA_PARAM_MARKERS)
+    ]
+    if blocked:
+        preview = ", ".join(blocked[:5])
+        raise RuntimeError(
+            "LoRA unexpectedly attached to excluded vision/projector modules. "
+            f"Examples: {preview}"
+        )
 
 
 def _load_latent_rows_if_available(model: torch.nn.Module, init_checkpoint: str | None) -> None:
