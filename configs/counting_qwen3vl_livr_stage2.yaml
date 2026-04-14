@@ -27,4 +27,4 @@ label_assistant_end: true
 seed: 42
 debug: true
 save_every_epoch: true
-init_checkpoint: outputs/counting_livr_stage1/epoch_3
+init_checkpoint: outputs/counting_livr_stage1/best
