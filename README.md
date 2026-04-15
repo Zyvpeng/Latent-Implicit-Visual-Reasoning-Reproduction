@@ -448,6 +448,36 @@ By default, evaluation:
 - shows live `tqdm` progress and running `acc`
 - writes `predictions.jsonl`
 
+## 实验结果 | Results
+
+下表按论文 Table 1 的展示习惯，汇总当前已经拿到的 `Counting / PixMo-Count` 结果。  
+The table below follows the presentation style of Table 1 in the paper and summarizes the currently available `Counting / PixMo-Count` results.
+
+| Benchmark | Origin | DirectSFT | LIVR |
+|:--|--:|--:|--:|
+| Counting / PixMo-Count | TBD | **76.06** | 75.14 |
+| Jigsaw |  |  |  |
+| Localization |  |  |  |
+| Visual Correspondence |  |  |  |
+| Art Style |  |  |  |
+| Semantic Correspondence |  |  |  |
+| Functional Correspondence |  |  |  |
+| Relative Reflectance |  |  |  |
+| Visual Similarity |  |  |  |
+| Mean |  |  |  |
+
+说明：  
+Notes:
+
+- `Origin` 指未微调原始模型的 baseline；当前 README 先留空，等对应的同 backbone 评测结果补齐后再填。  
+  `Origin` refers to the untuned base-model baseline; it is left blank for now until the same-backbone evaluation is available.
+- benchmark 列表按论文 Table 1 展开：Counting、Jigsaw、Localization、Visual Correspondence、Art Style、Semantic Correspondence、Functional Correspondence、Relative Reflectance、Visual Similarity，以及最终 `Mean`。  
+  The benchmark list follows Table 1 in the paper: Counting, Jigsaw, Localization, Visual Correspondence, Art Style, Semantic Correspondence, Functional Correspondence, Relative Reflectance, Visual Similarity, and the final `Mean`.
+- `DirectSFT = 76.06`，`LIVR = 75.14` 为当前你提供的 counting 实验结果，其余项目暂未填充。  
+  `DirectSFT = 76.06` and `LIVR = 75.14` are the current counting results you provided; the remaining entries are intentionally left blank for now.
+- 表中数值默认按 `accuracy (%)` 展示。  
+  Values in the table are reported as `accuracy (%)`.
+
 ## Stage 2 可选 attention 导出 | Optional Stage 2 Attention Export
 
 `stage2` 评测支持可选地实时保存每个 latent token 对视觉 token 的 attention map。  
